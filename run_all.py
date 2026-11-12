@@ -12,7 +12,8 @@ import time
 
 root = os.path.dirname(os.path.abspath(__file__))
 scripts = sorted(glob.glob(os.path.join(root, "python", "radar", "r*.py"))) + \
-          sorted(glob.glob(os.path.join(root, "python", "immagini", "i*.py")))
+          sorted(glob.glob(os.path.join(root, "python", "immagini", "i*.py"))) + \
+          sorted(glob.glob(os.path.join(root, "python", "dsp", "d*.py")))
 filters = sys.argv[1:]
 if filters:
     scripts = [s for s in scripts if any(os.path.basename(s).startswith(f) for f in filters)]

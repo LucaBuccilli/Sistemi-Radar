@@ -12,16 +12,19 @@ Per ogni argomento ho scritto lo **stesso esperimento in Python e in MATLAB**, c
 ## Struttura
 ```
 ├── python/
-│   ├── radar/       r01 … r06
+│   ├── radar/       r01 … r07
 │   ├── immagini/    i01 … i07
+│   ├── dsp/         d01 … d02   (virgola fissa, elaborazione a frame)
 │   ├── figures/     figure generate
 │   └── utils.py     funzioni comuni (salvataggio figure, immagine di test, PSNR)
 ├── matlab/
-│   ├── radar/       r01 … r06
+│   ├── radar/       r01 … r07
 │   ├── immagini/    i01 … i07
+│   ├── dsp/         d01 … d02
 │   └── utils/       test_image.m
 ├── simulink/
-│   └── build_models.m   costruisce e simula i modelli .slx con add_block/add_line
+│   ├── build_models.m       modelli con la sola libreria base
+│   └── build_models_dsp.m   modelli con DSP System Toolbox e in virgola fissa
 ├── run_all.py       lancia tutte le simulazioni Python
 └── requirements.txt
 ```
@@ -29,10 +32,10 @@ Per ogni argomento ho scritto lo **stesso esperimento in Python e in MATLAB**, c
 ## Avvio rapido
 ```bash
 pip install -r requirements.txt
-python run_all.py            # 13 simulazioni, circa 1 minuto
-python run_all.py r05 i05    # solo alcune
+python run_all.py            # 16 simulazioni, circa 1–2 minuti
+python run_all.py r07 d01    # solo alcune
 ```
-In MATLAB: aprire uno script in `matlab/` e premere **Run**. Per i modelli Simulink: `cd simulink` e poi `build_models`.
+In MATLAB: aprire uno script in `matlab/` e premere **Run**. Per i modelli Simulink: `cd simulink`, poi `build_models` e `build_models_dsp`.
 
 ---
 
@@ -127,6 +130,18 @@ D_s=\frac{\lambda R_y}{d_a},\qquad T_{obs}=\frac{D_s}{v},\qquad B_d=\frac{2v}{d_
 - Risoluzione lungo traccia da **344 m** (apertura reale) a **0.76 m**, coerente con il limite teorico ≈ d_a/2.
 
 ![SAR](python/figures/r06_sar_azimuth.png)
+
+### r07 · Rivelazione CA-CFAR sulla mappa range-Doppler
+Soglia adattiva *Cell Averaging CFAR*: il livello del disturbo nella cella sotto test viene stimato mediando N celle di addestramento, escludendo le celle di guardia attorno al bersaglio. Prima verifico la Pfa su rumore con potenza variabile, poi applico il rivelatore alla catena completa: compressione, eventuale MTI, FFT Doppler, CFAR.
+
+Con rivelatore quadratico, $|z|^2$ è esponenziale di media $P_n$ incognita:
+```math
+\hat P_n=\frac1N\sum_{i=1}^{N}|z_i|^2,\qquad T=\alpha\,\hat P_n,\qquad \alpha=N\left(P_{fa}^{-1/N}-1\right)\;\Rightarrow\;P_{fa}\ \text{costante, indipendente da }P_n
+```
+- Pfa progettata 10⁻⁴, misurata **1.26·10⁻⁴** con il CFAR contro **2.1·10⁻³** con la soglia fissa (il disturbo varia di 30 dB). Perdita CFAR ≈ 0.1 dB con N = 248.
+- Sulla mappa con clutter a Doppler zero: la **soglia fissa** produce migliaia di falsi allarmi; un **CFAR 2D** che media anche lungo il Doppler viene "accecato" dal clutter e perde 2 bersagli su 3; il **CFAR lungo la distanza** per ogni filtro Doppler e la catena **MTI + CFAR** rivelano **3 bersagli su 3** senza allarmi sul clutter.
+
+![CFAR](python/figures/r07_cfar.png)
 
 ---
 
@@ -235,6 +250,31 @@ Gli autovalori $\lambda_k$ fanno la parte delle frequenze: più la variazione de
 
 ---
 
+## Parte 3 – Verso l'implementazione: virgola fissa ed elaborazione a frame
+
+### d01 · Filtro FIR in virgola fissa
+Lo stesso passa-basso del modello Simulink (65 coefficienti, taglio a 1 kHz, Fs = 8 kHz) realizzato in aritmetica a virgola fissa, al variare della lunghezza di parola *w*. Ingresso e uscita in formato Q(w, w−2), coefficienti in Q(w, w−1), accumulatore a precisione piena.
+```math
+Q(w,f):\ \ x_q=\mathrm{sat}\!\left(2^{-f}\,\mathrm{round}\!\left(2^{f}x\right)\right),\qquad \Delta=2^{-f},\qquad \mathrm{SNR}\approx 6.02\,w+\text{cost}
+```
+- SNR in uscita da **34.8 dB a 8 bit** a **111 dB a 20 bit**: pendenza misurata **6.4 dB/bit**.
+- Con coefficienti a 8 bit l'attenuazione in banda oscura scende da 60 dB a **27 dB**: la quantizzazione dei coefficienti cambia la risposta in frequenza, non solo il rumore.
+
+![Virgola fissa](python/figures/d01_fixed_point_fir.png)
+
+### d02 · Elaborazione a frame: Buffer → finestra → FFT → media
+È la catena del modello Simulink `sim_fft_spectrum` e del blocco Spectrum Analyzer.
+```math
+X_m[k]=\sum_{n=0}^{N-1}w[n]\,x[mN+n]\,e^{-j2\pi kn/N},\qquad \hat S[k]=\frac{1}{M\sum_n w^2[n]}\sum_{m=0}^{M-1}|X_m[k]|^2,\qquad \Delta f=\frac{F_s}{N}
+```
+- Tono a 1000 Hz nel bin **k = f₀N/Fs = 32**, risoluzione 31.25 Hz.
+- Tono a metà tra due bin: lontano dal tono la finestra rettangolare lascia il leakage a **−44 dB**, Hann lo abbassa a **−95 dB**.
+- Mediando M = 64 frame la dispersione relativa della stima del rumore scende da 0.93 a **0.11** (teoria 1/√M = 0.125).
+
+![Spettro a frame](python/figures/d02_frame_fft_spectrum.png)
+
+---
+
 ## Simulink
 `simulink/build_models.m` crea i modelli da codice, usando solo la libreria base:
 
@@ -245,14 +285,23 @@ Gli autovalori $\lambda_k$ fanno la parte delle frequenze: più la variazione de
 | `sim_fir_lowpass` | Sine Wave ×2 → Sum → Discrete FIR Filter | filtro passa-basso a finestra di Hamming |
 | `sim_mti_canceller` | From Workspace → Unit Delay + Sum, Discrete FIR [1 −3 3 −1] | canceller MTI singolo e triplo |
 
+`simulink/build_models_dsp.m` aggiunge due modelli che usano i toolbox:
+
+| Modello | Blocchi principali | Cosa mostra | Requisiti |
+|---|---|---|---|
+| `sim_fft_spectrum` | Sine Wave + Random Number → **Buffer** (N = 256) → finestra di Hann (Product) → **FFT** → Abs; **Spectrum Analyzer** in parallelo | elaborazione a frame, picco nel bin f₀N/Fs, spettro mediato | DSP System Toolbox |
+| `sim_fir_fixed_point` | Data Type Conversion `fixdt(1,WL,WL-2)` → Discrete FIR in virgola fissa → Data Type Conversion `double`, confrontato con lo stesso FIR in double | SNR in uscita al variare della lunghezza di parola (8, 12, 16 bit) | Fixed-Point Designer |
+
 Costruire i modelli da script, invece che a mano, li rende riproducibili e versionabili con git.
 
 ## Scelte implementative
 - **Immagini di test sintetiche**: sfumatura, bordi netti e una tessitura periodica, così ogni effetto (ringing, aliasing, perdita di dettaglio) è visibile e lo script non dipende da file esterni.
 - **Teoria accanto alla misura**: ogni script stampa entrambi i valori; le differenze sono commentate nel codice. Ad esempio, nel SAR la risoluzione a −3 dB vale 0.886·d_a/2.
 - **Seed fissi** per la riproducibilità dei risultati Monte Carlo.
+- **CFAR per filtro Doppler**: la finestra di addestramento si estende solo lungo la distanza, perché lungo il Doppler il clutter a velocità zero contaminerebbe la stima del rumore.
+- **Virgola fissa simulata con round e saturazione** negli script, così il confronto si può fare anche senza Fixed-Point Designer; nel modello Simulink si usano invece i tipi `fixdt` nativi.
 
 ## Prossimi passi
 - Validare gli script MATLAB e i modelli Simulink su una release recente di MATLAB.
-- Aggiungere un rivelatore CFAR (CA-CFAR) alla mappa range-Doppler.
-- Estendere i modelli Simulink con DSP System Toolbox (Buffer, FFT, Spectrum Analyzer) e provare una versione in virgola fissa.
+- Varianti del CFAR più robuste ai bordi del clutter e ai bersagli vicini (GO-CFAR, OS-CFAR).
+- Generazione di codice HDL dal modello in virgola fissa (HDL Coder) e stima delle risorse su FPGA.

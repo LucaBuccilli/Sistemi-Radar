@@ -56,7 +56,8 @@ fprintf('[quantizer] b = %d bit: SNR = %.1f dB (teoria per sinusoide 6.02 b + 1.
 %% 3) FIR passa-basso: tono a 300 Hz + tono a 2500 Hz -> Discrete FIR Filter (fc = 1000 Hz)
 mdl = 'sim_fir_lowpass';
 Nt = 64; n = (0:Nt) - Nt/2; fc = 1000;
-h = 2*fc/Fs*sinc(2*fc/Fs*n) .* (0.54 - 0.46*cos(2*pi*(0:Nt)/Nt));  %#ok<NASGU> % sinc finestrata (Hamming)
+sincf = @(x) (x == 0) + (x ~= 0).*sin(pi*x)./(pi*x + (x == 0));   % sinc senza Signal Processing Toolbox
+h = 2*fc/Fs*sincf(2*fc/Fs*n) .* (0.54 - 0.46*cos(2*pi*(0:Nt)/Nt));  %#ok<NASGU> % sinc finestrata (Hamming)
 new_model(mdl);
 add_block('simulink/Sources/Sine Wave', [mdl '/Low'],  'Frequency', '2*pi*300',  'SampleTime', '1/Fs', 'Position', [40 30 80 70]);
 add_block('simulink/Sources/Sine Wave', [mdl '/High'], 'Frequency', '2*pi*2500', 'SampleTime', '1/Fs', 'Position', [40 110 80 150]);
